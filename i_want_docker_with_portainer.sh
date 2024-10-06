@@ -4,6 +4,14 @@
 # Docker installation script with portainer for Ubuntu
 # ==========================
 
+# Check sudo privileges
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root. Use sudo."
+    exit 1
+fi
+
+echo "The script is running with root privileges."
+
 # List of packages to check
 packages=("docker.io" "docker-doc" "docker-compose" "docker-compose-v2" "podman-docker" "containerd" "runc")
 
