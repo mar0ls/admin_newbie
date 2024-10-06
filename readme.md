@@ -1,5 +1,6 @@
-# admin_newbie
+![unnamed](https://github.com/user-attachments/assets/427d82fd-7d7e-4f91-ae3d-c563526d567c)
 
+#
 Welcome to the **admin_newbie** repository! 
 This repository contains installation and configuration scripts for Linux, mainly tested on Ubuntu 24. 
 The goal is to make it easier for new system administrators to work with popular tools and applications.
@@ -58,5 +59,5 @@ chmod +x <script_name>.sh
 ./<script_name>.sh
 ```
 
-## Requirments
+## Requirements
 ** Ubuntu 24 operating system but most scripts should work on Debian distributions. For other distributions minor adjustments will be necessary. **
