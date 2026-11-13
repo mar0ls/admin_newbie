@@ -190,6 +190,20 @@ sudo ./i_want_uptime_kuma.sh
 Needs Docker (run `i_want_docker_with_portainer.sh` first). Open `http://<server-ip>:3001`
 and create the admin account. Version and port are at the top of the script.
 
+**Who can open it:** by default anyone who can reach the server, even with ufw on, because
+Docker skips ufw for published ports. To limit that:
+
+```bash
+# only through your WireGuard VPN (run i_want_wireguard.sh first)
+sudo UPTIME_KUMA_BIND=10.8.0.1 ./i_want_uptime_kuma.sh
+# only from the server itself, open it from your computer with an SSH tunnel
+sudo UPTIME_KUMA_BIND=127.0.0.1 ./i_want_uptime_kuma.sh
+ssh -L 3001:localhost:3001 user@server-ip      # then http://localhost:3001
+```
+
+`10.8.0.1` is the server's address inside the VPN (the default of `i_want_wireguard.sh`).
+To change this later: `docker rm -f uptime-kuma` and run the script again, your data stays.
+
 ### Offload off / promiscuous mode
 
 For a capture or IDS box (tcpdump, Suricata, Zeek, Arkime) on a SPAN / mirror port:
