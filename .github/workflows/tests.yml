@@ -1,0 +1,68 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: shellcheck ./*.sh
+
+  # Real VM, so systemd and udev behave like on a normal server
+  smoke:
+    runs-on: ubuntu-24.04
+    needs: shellcheck
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: promisc
+        run: |
+          iface=$(ip route show default | awk '{print $5; exit}')
+          sudo ./i_want_promisc_as_a_service.sh "$iface"
+          ip link show "$iface" | grep -q PROMISC
+
+      - name: offload off
+        run: |
+          iface=$(ip route show default | awk '{print $5; exit}')
+          sudo ./i_want_offload_off.sh "$iface"
+          systemctl is-active "nic-offload-off@$iface"
+
+      - name: samba
+        run: sudo SMB_PASSWORD=Test1234 ./i_want_smb.sh
+
+      - name: auto updates
+        run: sudo AUTO_REBOOT=03:30 ./i_want_auto_updates.sh
+
+      - name: new admin user
+        run: |
+          sudo NEW_USER_PASSWORD=Secret123 ./i_want_new_admin_user.sh anna "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestOnly000000000000000000000000 anna@test"
+          id anna | grep -q sudo
+          sudo grep -q anna@test /home/anna/.ssh/authorized_keys
+
+      - name: backup
+        run: |
+          sudo mkdir -p /srv/data && echo hello | sudo tee /srv/data/file.txt
+          sudo BACKUP_PATHS="/srv/data" ./i_want_backup.sh /var/backups/restic
+          sudo restic-restore latest /tmp/restored
+          grep -q hello /tmp/restored/srv/data/file.txt
+
+      - name: wireguard
+        run: |
+          sudo ./i_want_wireguard.sh
+          sudo ./i_want_wireguard.sh phone
+          sudo wg show wg0 | grep -c 'allowed ips' | grep -qx 2
+
+      - name: uptime kuma
+        run: sudo ./i_want_uptime_kuma.sh
+
+      # Last, so ufw can't get in the way of the steps above
+      - name: firewall
+        run: |
+          sudo ./i_want_firewall.sh 80/tcp
+          sudo ufw status | grep -q 'Status: active'

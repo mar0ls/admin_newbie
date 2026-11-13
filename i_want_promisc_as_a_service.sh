@@ -1,58 +1,57 @@
-
-#!/bin/bash
-
-G=$(tput setaf 2)
-NC=$(tput sgr0)
+#!/usr/bin/env bash
 
 # ==========================
-# Promiscus mode in interface as a service script for Ubuntu
+# Promiscuous mode on an interface as a service (survives reboot)
+# Usage: sudo ./i_want_promisc_as_a_service.sh eth1
+#        sudo ./i_want_promisc_as_a_service.sh       # asks for the interface
+# Undo:  sudo systemctl disable --now promisc@eth1
 # ==========================
 
-# Input sudo password
-read -s -p "${G}Enter your sudo password: ${NC}" root
-echo
+set -euo pipefail
 
-# Check if the currently logged user is root
-if [ "$EUID" -eq 0 ]; then
-    echo $root | sudo -S echo "${G}Sudo access granted.${NC}"
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run me with sudo: sudo $0" >&2
     exit 1
-else
-    # Check if sudo password is correct
-    echo "$root" | sudo -S true  # This command checks if the password is valid
-    if [ $? -ne 0 ]; then
-        echo "Invalid sudo password. Exiting..."
-        exit 1
-    fi
 fi
 
-# Prompt name network interface for promisc mode
-read -p "${G}Enter the network interface name for monitoring: ${NC}" interface
+iface=${1:-}
+if [[ -z $iface ]]; then
+    ip -br link
+    read -rp "Interface for monitoring: " iface
+fi
 
+if ! ip link show dev "$iface" &>/dev/null; then
+    echo "Interface '$iface' doesn't exist." >&2
+    exit 1
+fi
 
-# Create systemd service files for promisc service
-PROMISC_FILE=/etc/systemd/system/promisc.service
-if ! grep -q "promisc" $PROMISC_FILE; then
-  echo $root | sudo -S bash -c "cat > '$PROMISC_FILE' <<EOF
+# Template unit, so it works for more than one interface.
+# "up" because a mirror port usually has no IP and nobody else brings it up.
+cat > /etc/systemd/system/promisc@.service <<'EOF'
 [Unit]
-Description=Bring up an interface in promiscuous mode during boot
-After=network.target
+Description=Promiscuous mode on %I
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/ip link set dev $interface promisc on
-TimeoutStartSec=0
+ExecStart=/usr/sbin/ip link set dev %I up promisc on
+ExecStop=/usr/sbin/ip link set dev %I promisc off
 RemainAfterExit=yes
 
 [Install]
-WantedBy=default.target
-EOF"
+WantedBy=multi-user.target
+EOF
+
+unit="promisc@$(systemd-escape "$iface").service"
+systemctl daemon-reload
+systemctl enable --now "$unit"
+
+if ip link show dev "$iface" | grep -q PROMISC; then
+    say "$iface is in promiscuous mode."
+else
+    echo "$iface is not in PROMISC mode, check: systemctl status $unit" >&2
+    exit 1
 fi
-
-# Reload systemd daemon, enable and start promisc services
-echo $root | sudo -S systemctl daemon-reload 
-echo $root | sudo -S systemctl enable promisc.service 
-
-# Arkime and Promisc services status
-echo "${G} PROMISC SERVICES STATUS:  ${NC}"
-echo $root | sudo -S systemctl status promisc.service 
-

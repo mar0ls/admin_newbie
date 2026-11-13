@@ -1,73 +1,82 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # ==========================
-# Docker installation script with portainer for Ubuntu
+# Docker CE + Portainer CE for Ubuntu / Debian
+# Usage: sudo ./i_want_docker_with_portainer.sh
 # ==========================
 
-# Check sudo privileges
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Use sudo."
+# Portainer tag: "lts" or a fixed version, e.g. 2.27.3
+PORTAINER_VERSION=${PORTAINER_VERSION:-lts}
+
+set -euo pipefail
+
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run me with sudo: sudo $0" >&2
     exit 1
 fi
 
-echo "The script is running with root privileges."
+# shellcheck source=/dev/null
+. /etc/os-release
+case "$ID ${ID_LIKE:-}" in
+    *ubuntu*) distro=ubuntu; codename=${UBUNTU_CODENAME:-$VERSION_CODENAME} ;;
+    *debian*) distro=debian; codename=$VERSION_CODENAME ;;
+    *) echo "Only Ubuntu and Debian are supported." >&2; exit 1 ;;
+esac
 
-# List of packages to check
-packages=("docker.io" "docker-doc" "docker-compose" "docker-compose-v2" "podman-docker" "containerd" "runc")
+is_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'ok installed'; }
 
-# Iterating through packages
-for pkg in "${packages[@]}"; do
-    if dpkg -l | grep -q "$pkg"; then  # Checking if the package is installed
-        echo "Removing $pkg..."
-        sudo apt-get remove -y "$pkg"  # Removing the package
-    else
-        echo "$pkg is not installed."
+# Remove distro packages that conflict with Docker CE.
+# Old docker.socket has to be stopped first, otherwise it stays half-alive
+# after the swap and the new dockerd can't start.
+if is_installed docker.io; then
+    systemctl stop docker.socket docker.service 2>/dev/null || true
+fi
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+    if is_installed "$pkg"; then
+        say "Removing $pkg"
+        apt-get remove -y "$pkg"
     fi
 done
 
-# Updating package list
-sudo apt-get update
+say "Adding Docker repository"
+apt-get update
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL "https://download.docker.com/linux/$distro/gpg" -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$distro $codename stable" \
+    > /etc/apt/sources.list.d/docker.list
 
-# Installing necessary tools
-sudo apt-get install -y ca-certificates curl gnupg
+say "Installing Docker"
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable docker
+systemctl restart docker.socket docker
+docker version --format 'Docker {{.Server.Version}} is running'
 
-# Creating directory for GPG key
-sudo install -m 0755 -d /etc/apt/keyrings
-
-# Downloading Docker's GPG key
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-# Adding Docker repository to Apt sources
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# Updating package list again
-sudo apt-get update
-
-# Installing Docker CE, CLI, Containerd, and additional plugins
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Checking if Docker was installed correctly
-if docker --version; then
-    echo "Docker has been successfully installed."
-else
-    echo "Docker installation failed!"
-    exit 1
+# docker without sudo (after re-login). Note: docker group = root access.
+if [[ -n ${SUDO_USER:-} && $SUDO_USER != root ]]; then
+    usermod -aG docker "$SUDO_USER"
 fi
 
-# Creating a volume for Portainer
-docker volume create portainer_data
-
-# Running the Portainer container
-docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:2.21.2
-
-# Checking if Portainer is running correctly
-if [ "$(docker ps -q -f name=portainer)" ]; then
-    echo "Portainer has been successfully installed and is running."
+if docker container inspect portainer &>/dev/null; then
+    say "Portainer already exists, making sure it's running"
+    docker start portainer >/dev/null
 else
-    echo "Portainer installation failed!"
-    exit 1
+    say "Starting Portainer ($PORTAINER_VERSION)"
+    docker volume create portainer_data >/dev/null
+    # Only 9443 (web UI). 8000 is for Edge Agents, not needed here.
+    docker run -d \
+        --name portainer \
+        --restart=always \
+        -p 9443:9443 \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v portainer_data:/data \
+        "portainer/portainer-ce:$PORTAINER_VERSION"
 fi
+
+ip=$(hostname -I | awk '{print $1}')
+say "Done. Open https://$ip:9443 and create the admin account within 5 minutes"
+echo "    (after that Portainer locks setup - fix with: docker restart portainer)"

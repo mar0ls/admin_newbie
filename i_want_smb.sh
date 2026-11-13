@@ -1,77 +1,70 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # ==========================
-# SMB installation script for Ubuntu
+# SMB share in your home dir (~/sambashare), only your user has access
+# Usage: sudo ./i_want_smb.sh
+#        sudo SMB_PASSWORD='...' ./i_want_smb.sh   # no password prompt
+# Connect: \\<server-ip>\sambashare  or  smb://<server-ip>/sambashare
 # ==========================
 
-# Input sudo password
-read -s -p "Enter your sudo password: " sudo_password
-echo
+set -euo pipefail
 
-# Check if the currently logged user is root
-if [ "$EUID" -eq 0 ]; then
-    echo "You are already logged in as root. Exiting..."
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run me with sudo: sudo $0" >&2
     exit 1
-else
-    # Check if sudo password is correct
-    echo "$sudo_password" | sudo -S true  # This command checks if the password is valid
-    if [ $? -ne 0 ]; then
-        echo "Invalid sudo password. Exiting..."
-        exit 1
-    fi
 fi
 
-# Continue with the rest of the script if not root and sudo password is valid
-echo "Installing necessary packages..."
-sudo apt update
-sudo apt install -y samba samba-common
-
-# Create a directory for the current user
-current_user=$(whoami)
-mkdir -p "/home/$current_user/sambashare"
-
-# Add or uncomment the necessary Samba configurations
-if grep -q "^#.*security = user" /etc/samba/smb.conf; then
-    $sudo_cmd sed -i 's/^#.*security = user/security = user/' /etc/samba/smb.conf
-else
-    echo "security = user" | $sudo_cmd tee -a /etc/samba/smb.conf
+user=${SUDO_USER:-}
+if [[ -z $user || $user == root ]]; then
+    echo "Run this with sudo from your normal account, not as root." >&2
+    exit 1
 fi
+home=$(getent passwd "$user" | cut -d: -f6)
+share=$home/sambashare
+conf=/etc/samba/smb.conf
 
-if grep -q "^#.*map to guest = never" /etc/samba/smb.conf; then
-    $sudo_cmd sed -i 's/^#.*map to guest = never/map to guest = never/' /etc/samba/smb.conf
+say "Installing Samba"
+apt-get update
+apt-get install -y samba
+
+install -d -o "$user" -g "$user" "$share"
+
+[[ -e $conf.orig ]] || cp "$conf" "$conf.orig"
+
+if grep -q '^\[sambashare\]' "$conf"; then
+    say "[sambashare] already in $conf"
 else
-    echo "map to guest = never" | $sudo_cmd tee -a /etc/samba/smb.conf
-fi
+    cat >> "$conf" <<EOF
 
-# Add Samba configuration
-sudo tee -a /etc/samba/smb.conf > /dev/null <<EOF
 [sambashare]
-    comment = Samba on Ubuntu
-    path = /home/$current_user/sambashare
+    comment = $user's share
+    path = $share
     read only = no
-    browsable = yes
-    writable=yes
-    valid users = $current_user
+    browseable = yes
+    valid users = $user
 EOF
+fi
 
-# Restart Samba service and enable it to start on boot
-echo "Starting Samba service..."
-sudo systemctl restart smbd
-sudo systemctl enable smbd
-
-# Allow Samba through the firewall
-sudo ufw allow samba
-
-# Change ownership of the shared directory
-sudo chown -R "$current_user:sambashare" "/home/$current_user/sambashare/"
-
-# Set Samba password for the current user
-sudo smbpasswd -a "$current_user"
-
-# Check if Samba was set up correctly
-if testparm; then
-    echo "Samba setup successfully."
-else
-    echo "Samba setup failed."
+if ! testparm -s "$conf" &>/dev/null; then
+    testparm -s "$conf"
     exit 1
 fi
+
+say "Setting Samba password for $user"
+if [[ -n ${SMB_PASSWORD:-} ]]; then
+    printf '%s\n%s\n' "$SMB_PASSWORD" "$SMB_PASSWORD" | smbpasswd -s -a "$user"
+else
+    smbpasswd -a "$user"
+fi
+
+systemctl enable smbd
+systemctl restart smbd
+
+if command -v ufw >/dev/null; then
+    ufw allow Samba
+fi
+
+ip=$(hostname -I | awk '{print $1}')
+say "Done. Share: \\\\$ip\\sambashare (user: $user)"
