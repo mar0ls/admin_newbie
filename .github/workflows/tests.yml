@@ -21,6 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      # Fresh runners often still run unattended-upgrades, which holds the dpkg
+      # lock; make apt wait for it instead of failing immediately
+      - name: apt lock timeout
+        run: echo 'DPkg::Lock::Timeout "300";' | sudo tee /etc/apt/apt.conf.d/99lock-timeout
+
       - name: promisc
         run: |
           iface=$(ip route show default | awk '{print $5; exit}')
